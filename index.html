@@ -166,6 +166,8 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .addcard[hidden] { display: none; }
 .addcard .hint { margin-top: 4px; }
 .cancel { margin-top: 10px; font-size: 0.95rem; padding: 10px 16px; }
+.pj-edit { margin-top: 8px; }
+#pj-wrap { grid-column: 1 / -1; }
 .brand .notif { align-self: flex-start; margin-top: 8px; }
 .vtabs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .vtab { position: relative; font: inherit; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px;
@@ -330,6 +332,8 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         <label for="n" id="n-wrap">Barres perdues depuis le plein<input id="n" type="number" inputmode="numeric" min="1" step="1"></label>
         <label for="litres" id="l-wrap" hidden>Litres ajoutés (facultatif)<input id="litres" type="number" inputmode="decimal" min="0" step="0.01" placeholder="62,5"></label>
         <label for="prix" id="p-wrap" hidden>Montant payé, FCFA (facultatif)<input id="prix" type="number" inputmode="numeric" min="0" step="1" placeholder="45 000"></label>
+        <label for="projet" id="pj-wrap" hidden>Projet qui paie ce carburant<input id="projet" type="text" autocomplete="off" list="projets" placeholder="Ex. Projet IAP"></label>
+        <datalist id="projets"></datalist>
       </div>
       <button class="submit" id="submit" type="submit">Enregistrer</button>
       <p class="msg" id="msg" role="status" aria-live="polite"></p>
@@ -344,7 +348,7 @@ select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   <section class="card export" aria-labelledby="x-title">
     <h2 id="x-title">Excel et sauvegarde</h2>
-    <p class="hint">Le fichier Excel contient tous les véhicules, en 5 onglets : Synthèse, Relevés carburant, Trajets, Vidanges et Véhicules. Il arrive dans tes Téléchargements.</p>
+    <p class="hint">Le fichier Excel contient tous les véhicules, en 6 onglets : Synthèse, Carburant par projet, Relevés carburant, Trajets, Vidanges et Véhicules. Il arrive dans tes Téléchargements.</p>
     <button type="button" class="submit" id="xlsx">Exporter vers Excel</button>
     <p class="msg" id="x-msg" role="status" aria-live="polite"></p>
     <h3 class="sub-h">Sauvegarde de l'application</h3>
@@ -612,6 +616,7 @@ var MiniXlsx = (function () {
     renderTrips(a, list, v);
     renderVidange(list, v);
     renderJournal(a, v);
+    renderProjets();
   }
 
   function renderTabs() {
@@ -805,6 +810,7 @@ var MiniXlsx = (function () {
         var parts = [];
         if (r.litres > 0) parts.push(nf(r.litres, 1) + " L");
         if (r.prix > 0) parts.push(nf(r.prix) + " FCFA");
+        parts.unshift(r.projet ? "Projet : " + r.projet : "Projet non renseigné");
         if (r.real) parts.push(nf(r.realKm) + " km depuis le plein précédent : " + nf(r.real, 1) + " L/100 km");
         detail = parts.join(" · ") || "Plein sans litres renseignés";
       } else if (r.dkm != null && r.dn > 0 && r.dkm > 0) {
@@ -815,7 +821,8 @@ var MiniXlsx = (function () {
         h("div", { class: "main" },
           h("div", { class: "km num" }, nf(r.km), " ", h("span", null, "km"), h("span", { class: "badge" + (r.type === "plein" ? " plein" : "") }, r.type === "plein" ? "Plein" : "Barre " + r.n)),
           h("div", { class: "date" }, fdate(r.date)),
-          h("div", { class: "detail" }, detail)),
+          h("div", { class: "detail" }, detail),
+          r.type === "plein" ? h("button", { type: "button", class: "del pj-edit", onclick: function () { editProjet(r.id); } }, r.projet ? "Changer le projet" : "Indiquer le projet") : null),
         delBtn(r.id, "Supprimer le relevé de " + nf(r.km) + " km"));
     }));
     if (!ui.nTouched) $("n").value = a.last && a.last.type !== "plein" ? Math.min(v.barres, a.last.n + 1) : 1;
@@ -895,6 +902,31 @@ var MiniXlsx = (function () {
     timer = setTimeout(function () { ui.pendingDelete = null; render(); }, 4000);
   }
 
+  function projets() {
+    var seen = {};
+    db.entries.forEach(function (e) { if (e.type === "plein" && e.projet) seen[e.projet] = 1; });
+    return Object.keys(seen).sort(function (a, b) { return a.localeCompare(b, "fr"); });
+  }
+  function editProjet(id) {
+    var e = db.entries.filter(function (x) { return x.id === id; })[0]; if (!e) return;
+    var list = projets();
+    var v = window.prompt("Projet qui a payé ce plein" + (list.length ? " (déjà utilisés : " + list.join(", ") + ")" : "") + " :", e.projet || "");
+    if (v == null) return;
+    v = v.trim().replace(/\s+/g, " ");
+    var known = list.filter(function (x) { return x.localeCompare(v, "fr", { sensitivity: "base" }) === 0; })[0];
+    if (v) e.projet = known || v; else delete e.projet;
+    persist(); render();
+    say("msg", v ? "Plein du " + fdate(e.date) + " rattaché au projet « " + e.projet + " »." : "Projet retiré de ce plein.");
+  }
+  function renderProjets() {
+    $("projets").replaceChildren.apply($("projets"), projets().map(function (p) { return h("option", { value: p }); }));
+    if (!$("projet").value) {
+      var last = db.entries.filter(function (e) { return e.type === "plein" && e.projet && e.vid === db.current; }).slice(-1)[0]
+        || db.entries.filter(function (e) { return e.type === "plein" && e.projet; }).slice(-1)[0];
+      if (last) $("projet").value = last.projet;
+    }
+  }
+
   function setMode(m) {
     ui.mode = m;
     $("m-barre").setAttribute("aria-pressed", m === "barre");
@@ -902,6 +934,7 @@ var MiniXlsx = (function () {
     $("n-wrap").hidden = m !== "barre";
     $("l-wrap").hidden = m !== "plein";
     $("p-wrap").hidden = m !== "plein";
+    $("pj-wrap").hidden = m !== "plein";
     say("msg", ""); render();
   }
   $("m-barre").addEventListener("click", function () { setMode("barre"); });
@@ -920,11 +953,16 @@ var MiniXlsx = (function () {
       var l = parseFloat($("litres").value), p = parseFloat($("prix").value);
       if ($("litres").value !== "" && !(l > 0)) { say("msg", "Les litres doivent être un nombre positif.", true); return; }
       if ($("prix").value !== "" && !(p > 0)) { say("msg", "Le montant doit être un nombre positif.", true); return; }
+      var pj = $("projet").value.trim().replace(/\s+/g, " ");
+      if (!pj) { say("msg", "Indique le projet qui paie ce carburant.", true); $("projet").focus(); return; }
+      // même orthographe que les projets déjà saisis (majuscules, accents)
+      var known = projets().filter(function (x) { return x.localeCompare(pj, "fr", { sensitivity: "base" }) === 0; })[0];
+      data.projet = known || pj;
       if (l > 0) data.litres = l;
       if (p > 0) data.prix = Math.round(p);
     }
     add(data);
-    say("msg", (ui.mode === "plein" ? "Plein enregistré" : "Barre " + data.n + " enregistrée") + " pour " + v.nom + ".");
+    say("msg", (ui.mode === "plein" ? "Plein enregistré sur le projet « " + data.projet + " »" : "Barre " + data.n + " enregistrée") + " pour " + v.nom + ".");
     $("km").value = ""; $("litres").value = ""; $("prix").value = ""; ui.nTouched = false; render(); notifyIfNeeded();
   });
 
@@ -991,7 +1029,7 @@ var MiniXlsx = (function () {
   /* ---------- Excel ---------- */
   function round(x, d) { if (x == null || !isFinite(x)) return null; var p = Math.pow(10, d || 0); return Math.round(x * p) / p; }
   function exportExcel() {
-    var syn = [], fuel = [], trips = [], vids = [], vehs = [];
+    var syn = [], fuel = [], trips = [], vids = [], vehs = [], byProj = {};
     db.vehicles.forEach(function (v) {
       var list = entriesOf(v.id), a = analyze(list, v), c = curKmOf(list, v), vi = vidangeInfoOf(list, v);
       var t = list.filter(function (e) { return isTrip(e) && e.kmArrivee > 0; });
@@ -1004,8 +1042,13 @@ var MiniXlsx = (function () {
         t.length, tkm, pleins.length, litres ? round(litres, 1) : null, fcfa || null,
         vi ? vi.next : null, vi ? round(vi.left, 0) : null, [al ? al.title : "", va ? va.title : ""].filter(Boolean).join(" ; ")]);
       a.rows.forEach(function (r) {
-        fuel.push([v.nom, r.date, r.km, r.type === "plein" ? "Plein" : "Barre perdue", r.type === "barre" ? r.n : null,
+        fuel.push([v.nom, r.date, r.km, r.type === "plein" ? "Plein" : "Barre perdue", r.type === "plein" ? (r.projet || "Non renseigné") : "", r.type === "barre" ? r.n : null,
           r.litres || null, r.prix || null, r.dkm != null ? r.dkm : (r.realKm || null), round(r.kmBar, 0), round(r.type === "plein" ? r.real : r.l100, 1)]);
+        if (r.type === "plein") {
+          var k = r.projet || "Non renseigné", g = byProj[k] || (byProj[k] = { n: 0, l: 0, m: 0, sansL: 0, sansM: 0, veh: {}, d1: r.date, d2: r.date });
+          g.n++; if (r.litres > 0) g.l += r.litres; else g.sansL++; if (r.prix > 0) g.m += r.prix; else g.sansM++;
+          g.veh[v.nom] = 1; if (r.date < g.d1) g.d1 = r.date; if (r.date > g.d2) g.d2 = r.date;
+        }
       });
       tripsOf(list).slice().reverse().forEach(function (e) {
         var done = e.kmArrivee > 0, dist = done ? e.kmArrivee - e.kmDepart : null;
@@ -1017,6 +1060,12 @@ var MiniXlsx = (function () {
       });
       vehs.push([v.nom, v.immat || "", v.carburant || "", v.annee || null, v.affectation || "", c, v.capacite, v.barres, round(v.capacite / v.barres, 1), v.alerte, v.alerteVidange]);
     });
+    var proj = Object.keys(byProj).sort(function (a, b) { return (a === "Non renseigné") - (b === "Non renseigné") || a.localeCompare(b, "fr"); }).map(function (k) {
+      var g = byProj[k], rem = [];
+      if (g.sansL) rem.push(g.sansL + " plein(s) sans litres");
+      if (g.sansM) rem.push(g.sansM + " plein(s) sans montant");
+      return [k, g.n, g.l ? round(g.l, 1) : null, g.m || null, Object.keys(g.veh).join(", "), g.d1, g.d2, rem.join(" ; ")];
+    });
     var sheets = [
       { name: "Synthèse", rows: syn, cols: [
         { header: "Véhicule", width: 24 }, { header: "Immatriculation", width: 16 }, { header: "Compteur actuel (km)", width: 14, type: "int" },
@@ -1026,9 +1075,13 @@ var MiniXlsx = (function () {
         { header: "Trajets terminés", width: 10, type: "int" }, { header: "Km des trajets", width: 12, type: "int" },
         { header: "Nombre de pleins", width: 10, type: "int" }, { header: "Litres achetés", width: 11, type: "dec" }, { header: "Montant carburant (FCFA)", width: 15, type: "int" },
         { header: "Prochaine vidange (km)", width: 13, type: "int" }, { header: "Km restants avant vidange", width: 13, type: "int" }, { header: "Alertes en cours", width: 36 }] },
+      { name: "Carburant par projet", rows: proj, cols: [
+        { header: "Projet", width: 24 }, { header: "Nombre de pleins", width: 10, type: "int" }, { header: "Litres", width: 10, type: "dec" },
+        { header: "Montant (FCFA)", width: 14, type: "int" }, { header: "Véhicules", width: 30 }, { header: "Premier plein", width: 12, type: "date" },
+        { header: "Dernier plein", width: 12, type: "date" }, { header: "À compléter", width: 34 }] },
       { name: "Relevés carburant", rows: fuel, cols: [
         { header: "Véhicule", width: 24 }, { header: "Date", width: 12, type: "date" }, { header: "Compteur (km)", width: 12, type: "int" },
-        { header: "Type", width: 13 }, { header: "N° de barre perdue", width: 10, type: "int" }, { header: "Litres ajoutés", width: 10, type: "dec" },
+        { header: "Type", width: 13 }, { header: "Projet", width: 20 }, { header: "N° de barre perdue", width: 10, type: "int" }, { header: "Litres ajoutés", width: 10, type: "dec" },
         { header: "Montant (FCFA)", width: 12, type: "int" }, { header: "Km depuis le relevé précédent", width: 14, type: "int" },
         { header: "Km par barre", width: 10, type: "int" }, { header: "Conso. (L/100 km)", width: 11, type: "dec" }] },
       { name: "Trajets", rows: trips, cols: [
